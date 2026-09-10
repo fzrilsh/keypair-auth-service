@@ -5,7 +5,7 @@ VALUES ($1, $2, $3, $4, $5);
 -- name: RedeemInvite :one
 UPDATE invite_tokens SET used_at = now()
 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
-RETURNING user_id;
+RETURNING invite_id, user_id;
 
 -- name: ListInvites :many
 SELECT invite_id, token_prefix, user_id, expires_at, used_at, created_at

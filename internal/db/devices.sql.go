@@ -93,6 +93,27 @@ func (q *Queries) GetDevice(ctx context.Context, id pgtype.UUID) (Device, error)
 	return i, err
 }
 
+const getDeviceForUpdate = `-- name: GetDeviceForUpdate :one
+SELECT id, user_id, public_key, device_name, status, created_at, approved_at
+FROM devices WHERE id = $1
+FOR UPDATE
+`
+
+func (q *Queries) GetDeviceForUpdate(ctx context.Context, id pgtype.UUID) (Device, error) {
+	row := q.db.QueryRow(ctx, getDeviceForUpdate, id)
+	var i Device
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.PublicKey,
+		&i.DeviceName,
+		&i.Status,
+		&i.CreatedAt,
+		&i.ApprovedAt,
+	)
+	return i, err
+}
+
 const insertDevice = `-- name: InsertDevice :one
 INSERT INTO devices (user_id, public_key, device_name)
 VALUES ($1, $2, $3)

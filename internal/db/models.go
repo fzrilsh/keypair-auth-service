@@ -39,6 +39,16 @@ type Device struct {
 	ApprovedAt pgtype.Timestamptz `json:"approved_at"`
 }
 
+type DeviceScope struct {
+	DeviceID pgtype.UUID `json:"device_id"`
+	ScopeID  pgtype.UUID `json:"scope_id"`
+}
+
+type InviteScope struct {
+	InviteID pgtype.UUID `json:"invite_id"`
+	ScopeID  pgtype.UUID `json:"scope_id"`
+}
+
 type InviteToken struct {
 	TokenHash   []byte             `json:"token_hash"`
 	TokenPrefix string             `json:"token_prefix"`
@@ -47,4 +57,11 @@ type InviteToken struct {
 	UsedAt      pgtype.Timestamptz `json:"used_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	InviteID    pgtype.UUID        `json:"invite_id"`
+}
+
+type Scope struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	DisabledAt pgtype.Timestamptz `json:"disabled_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }

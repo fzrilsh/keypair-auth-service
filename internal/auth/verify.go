@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"crypto/ed25519"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,7 +12,6 @@ import (
 type VerifyInput struct {
 	DeviceID  uuid.UUID
 	ClientID  string
-	Scope     string
 	Signature []byte
 	Timestamp int64
 }
@@ -45,7 +45,13 @@ func (s *Service) Verify(ctx context.Context, input VerifyInput) (TokenResult, e
 	if err != nil {
 		return TokenResult{}, err
 	}
-	token, err := IssueDeviceJWTWithScope(s.cfg.Keys, s.cfg.Issuer, input.ClientID, device, input.Scope, s.cfg.JWTLifetime, now)
+	scopeNames := make([]string, 0, len(device.Scopes))
+	for _, scope := range device.Scopes {
+		if scope.DisabledAt == nil {
+			scopeNames = append(scopeNames, scope.Name)
+		}
+	}
+	token, err := IssueDeviceJWTWithScope(s.cfg.Keys, s.cfg.Issuer, input.ClientID, device, strings.Join(scopeNames, " "), s.cfg.JWTLifetime, now)
 	if err != nil {
 		return TokenResult{}, err
 	}

@@ -36,7 +36,15 @@ func TestPostgresMultiAppFlowAndChallengeConcurrency(t *testing.T) {
 		Keys: signingKeys, AllowedAudiences: map[string]struct{}{"app-a": {}, "app-b": {}}, Issuer: "integration",
 		NonceTTL: time.Minute, TimestampSkew: time.Minute, JWTLifetime: 15 * time.Minute,
 	})
-	invite, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute)
+	scopeA, err := service.CreateScope(t.Context(), "profile:read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopeB, err := service.CreateScope(t.Context(), "devices:read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute, scopeA.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +53,16 @@ func TestPostgresMultiAppFlowAndChallengeConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := service.Approve(t.Context(), enrolled.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	devices, err := service.ListDevices(t.Context())
+	if err != nil || len(devices) != 1 || len(devices[0].Scopes) != 1 || devices[0].Scopes[0].Name != "profile:read" {
+		t.Fatalf("invite scope was not copied to device: %v %+v", err, devices)
+	}
+	if err := service.ReplaceDeviceScopes(t.Context(), enrolled.DeviceID, []uuid.UUID{scopeA.ID, scopeB.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DisableScope(t.Context(), scopeB.ID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -86,7 +104,7 @@ func TestPostgresMultiAppFlowAndChallengeConcurrency(t *testing.T) {
 		t.Fatal(err)
 	}
 	claims, err := auth.ParseAndValidateJWT(signingKeys, "integration", "app-a", result.AccessToken, time.Now())
-	if err != nil || len(claims.Audience) != 1 || claims.Audience[0] != "app-a" {
+	if err != nil || len(claims.Audience) != 1 || claims.Audience[0] != "app-a" || claims.Scope != "profile:read" {
 		t.Fatalf("unexpected app-a token: %v %+v", err, claims)
 	}
 
@@ -136,7 +154,7 @@ func testPool(t *testing.T) *pgxpool.Pool {
 
 func resetDatabase(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
-	if _, err := pool.Exec(t.Context(), "TRUNCATE admin_sessions, admins, auth_nonces, invite_tokens, devices CASCADE"); err != nil {
+	if _, err := pool.Exec(t.Context(), "TRUNCATE admin_sessions, admins, auth_nonces, invite_tokens, devices, scopes CASCADE"); err != nil {
 		t.Fatal(err)
 	}
 }

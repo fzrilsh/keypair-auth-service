@@ -175,3 +175,54 @@ func TestInvitesPageRendersOpaqueRemoveID(t *testing.T) {
 		t.Fatalf("remove form missing from invites page: %s", response.Body.String())
 	}
 }
+
+func TestScopeAdminRoutesRequireCSRFAndRenderAssignments(t *testing.T) {
+	router, service, _, sessions := newRouterFixture(t)
+	session, err := sessions.Create(uuid.New(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := &http.Cookie{Name: "admin_session", Value: session.ID}
+	csrfCookie := &http.Cookie{Name: "admin_csrf", Value: session.CSRFToken}
+
+	getScopes := httptest.NewRequest(http.MethodGet, "/admin/scopes", nil)
+	getScopes.AddCookie(cookie)
+	getScopes.AddCookie(csrfCookie)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, getScopes)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Scope name") {
+		t.Fatalf("unexpected scopes page: %d %s", response.Code, response.Body.String())
+	}
+
+	withoutCSRF := httptest.NewRequest(http.MethodPost, "/admin/scopes", strings.NewReader("name=profile%3Aread"))
+	withoutCSRF.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	withoutCSRF.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, withoutCSRF)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected missing CSRF rejection, got %d", response.Code)
+	}
+
+	create := httptest.NewRequest(http.MethodPost, "/admin/scopes", strings.NewReader("name=profile%3Aread"))
+	create.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	create.Header.Set("X-CSRF-Token", session.CSRFToken)
+	create.AddCookie(cookie)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, create)
+	if response.Code != http.StatusFound || response.Header().Get("Location") != "/admin/scopes" {
+		t.Fatalf("unexpected scope create response: %d %q", response.Code, response.Header().Get("Location"))
+	}
+
+	scopes, err := service.ListScopes(t.Context())
+	if err != nil || len(scopes) != 1 {
+		t.Fatalf("unexpected catalog: %v %+v", err, scopes)
+	}
+	invites := httptest.NewRequest(http.MethodGet, "/admin/invites", nil)
+	invites.AddCookie(cookie)
+	invites.AddCookie(csrfCookie)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, invites)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `name="scope_id"`) || !strings.Contains(response.Body.String(), scopes[0].ID.String()) {
+		t.Fatalf("scope checkbox missing from invite page: %d %s", response.Code, response.Body.String())
+	}
+}

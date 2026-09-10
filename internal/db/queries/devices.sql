@@ -29,3 +29,8 @@ RETURNING id, user_id, public_key, device_name, status, created_at, approved_at;
 UPDATE devices SET status = 'revoked'
 WHERE id = $1 AND status = 'approved'
 RETURNING id, user_id, public_key, device_name, status, created_at, approved_at;
+
+-- name: GetDeviceForUpdate :one
+SELECT id, user_id, public_key, device_name, status, created_at, approved_at
+FROM devices WHERE id = $1
+FOR UPDATE;

@@ -24,11 +24,31 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool, queries: db.New(pool)}
 }
 
-func (s *PostgresStore) CreateInvite(ctx context.Context, id uuid.UUID, hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time) error {
-	return s.queries.InsertInvite(ctx, db.InsertInviteParams{
+func (s *PostgresStore) CreateInvite(ctx context.Context, id uuid.UUID, hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time, scopeIDs []uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := s.queries.WithTx(tx)
+	if err := queries.InsertInvite(ctx, db.InsertInviteParams{
 		InviteID: toPGUUID(id), TokenHash: hash, TokenPrefix: prefix, UserID: toPGUUID(userID),
 		ExpiresAt: toPGTime(expiresAt),
-	})
+	}); err != nil {
+		return err
+	}
+	for _, scopeID := range scopeIDs {
+		if _, err := queries.GetActiveScope(ctx, toPGUUID(scopeID)); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrConflict
+			}
+			return err
+		}
+		if err := queries.InsertInviteScope(ctx, db.InsertInviteScopeParams{InviteID: toPGUUID(id), ScopeID: toPGUUID(scopeID)}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *PostgresStore) RemoveInvite(ctx context.Context, id uuid.UUID) error {
@@ -49,7 +69,7 @@ func (s *PostgresStore) EnrollDevice(ctx context.Context, tokenHash []byte, publ
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	queries := s.queries.WithTx(tx)
-	userID, err := queries.RedeemInvite(ctx, tokenHash)
+	redeemed, err := queries.RedeemInvite(ctx, tokenHash)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Device{}, ErrInvalidCredential
@@ -57,7 +77,7 @@ func (s *PostgresStore) EnrollDevice(ctx context.Context, tokenHash []byte, publ
 		return Device{}, err
 	}
 	created, err := queries.InsertDevice(ctx, db.InsertDeviceParams{
-		UserID: userID, PublicKey: append([]byte(nil), publicKey...),
+		UserID: redeemed.UserID, PublicKey: append([]byte(nil), publicKey...),
 		DeviceName: pgtype.Text{String: deviceName, Valid: deviceName != ""},
 	})
 	if err != nil {
@@ -65,6 +85,9 @@ func (s *PostgresStore) EnrollDevice(ctx context.Context, tokenHash []byte, publ
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return Device{}, ErrConflict
 		}
+		return Device{}, err
+	}
+	if err := queries.CopyInviteScopesToDevice(ctx, db.CopyInviteScopesToDeviceParams{DeviceID: created.ID, InviteID: redeemed.InviteID}); err != nil {
 		return Device{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -131,6 +154,13 @@ func (s *PostgresStore) VerifyDevice(ctx context.Context, input VerifyInput, now
 		return Device{}, ErrInvalidCredential
 	}
 	device := fromDBDevice(deviceRow)
+	scopeNames, err := queries.ListEnabledDeviceScopes(ctx, toPGUUID(input.DeviceID))
+	if err != nil {
+		return Device{}, err
+	}
+	for _, name := range scopeNames {
+		device.Scopes = append(device.Scopes, Scope{Name: name})
+	}
 	if absDuration(now.Sub(time.Unix(input.Timestamp, 0))) > skew || !verify(device, stored.Nonce) {
 		return Device{}, ErrInvalidCredential
 	}
@@ -167,6 +197,13 @@ func (s *PostgresStore) ListInvites(ctx context.Context) ([]Invite, error) {
 			usedAt := row.UsedAt.Time
 			invite.UsedAt = &usedAt
 		}
+		if invite.ID != uuid.Nil {
+			scopes, err := s.queries.ListInviteScopes(ctx, toPGUUID(invite.ID))
+			if err != nil {
+				return nil, err
+			}
+			invite.Scopes = fromDBScopes(scopes)
+		}
 		invites = append(invites, invite)
 	}
 	return invites, nil
@@ -179,7 +216,13 @@ func (s *PostgresStore) ListDevices(ctx context.Context) ([]Device, error) {
 	}
 	devices := make([]Device, 0, len(rows))
 	for _, row := range rows {
-		devices = append(devices, fromDBDevice(row))
+		device := fromDBDevice(row)
+		scopes, err := s.queries.ListDeviceScopes(ctx, toPGUUID(device.ID))
+		if err != nil {
+			return nil, err
+		}
+		device.Scopes = fromDBScopes(scopes)
+		devices = append(devices, device)
 	}
 	return devices, nil
 }
@@ -224,4 +267,101 @@ func fromDBDevice(row db.Device) Device {
 		device.ApprovedAt = &approvedAt
 	}
 	return device
+}
+
+func (s *PostgresStore) ListScopes(ctx context.Context) ([]Scope, error) {
+	rows, err := s.queries.ListScopes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return fromDBScopes(rows), nil
+}
+
+func (s *PostgresStore) ListActiveScopes(ctx context.Context) ([]Scope, error) {
+	rows, err := s.queries.ListActiveScopes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return fromDBScopes(rows), nil
+}
+
+func (s *PostgresStore) CreateScope(ctx context.Context, name string) (Scope, error) {
+	row, err := s.queries.InsertScope(ctx, name)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return Scope{}, ErrConflict
+		}
+		return Scope{}, err
+	}
+	return fromDBScope(row), nil
+}
+
+func (s *PostgresStore) DisableScope(ctx context.Context, id uuid.UUID) error {
+	_, err := s.queries.DisableScope(ctx, toPGUUID(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+func (s *PostgresStore) EnableScope(ctx context.Context, id uuid.UUID) error {
+	_, err := s.queries.EnableScope(ctx, toPGUUID(id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	return err
+}
+
+func (s *PostgresStore) ReplaceDeviceScopes(ctx context.Context, deviceID uuid.UUID, scopeIDs []uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	queries := s.queries.WithTx(tx)
+	if _, err := queries.GetDeviceForUpdate(ctx, toPGUUID(deviceID)); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if err := queries.DeleteDeviceScopes(ctx, toPGUUID(deviceID)); err != nil {
+		return err
+	}
+	for _, scopeID := range scopeIDs {
+		if _, err := queries.GetScope(ctx, toPGUUID(scopeID)); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrConflict
+			}
+			return err
+		}
+		if err := queries.InsertDeviceScope(ctx, db.InsertDeviceScopeParams{DeviceID: toPGUUID(deviceID), ScopeID: toPGUUID(scopeID)}); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func fromDBScope(row db.Scope) Scope {
+	scope := Scope{Name: row.Name}
+	if row.ID.Valid {
+		scope.ID = uuid.UUID(row.ID.Bytes)
+	}
+	if row.DisabledAt.Valid {
+		disabledAt := row.DisabledAt.Time
+		scope.DisabledAt = &disabledAt
+	}
+	if row.CreatedAt.Valid {
+		scope.CreatedAt = row.CreatedAt.Time
+	}
+	return scope
+}
+
+func fromDBScopes(rows []db.Scope) []Scope {
+	result := make([]Scope, 0, len(rows))
+	for _, row := range rows {
+		result = append(result, fromDBScope(row))
+	}
+	return result
 }

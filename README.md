@@ -25,62 +25,73 @@ The previous file is a public PKIX PEM and the active file is a private PKCS#8 P
 
 ## Endpoints
 
-- `POST /api/devices/enroll`: consume a one-time invite and register a public key as pending
+- `POST /api/devices/enroll`: consume a one-time invite and register a public key as pending; scopes selected on the invite are copied to the device
 - `GET /api/auth/challenge?device_id=...`: obtain a one-time nonce for an approved device
-- `POST /api/auth/verify`: submit the device signature and `client_id`, optionally including an opaque space-delimited `scope`; receives a 15-minute Bearer JWT with that scope claim
+- `POST /api/auth/verify`: submit the device signature and `client_id`; receives a 15-minute Bearer JWT whose scope claim is derived from the device's active admin assignments
 - `GET /.well-known/jwks.json`: public active/previous Ed25519 keys; no admin session required
-- `/admin/*`: browser session-protected device and invite administration
+- `/admin/*`: browser session-protected scope catalog, device, and invite administration
 - `/admin/docs`: session-protected Swagger UI and OpenAPI YAML
 
-## Scope in JWTs
+## Admin-managed device scopes
 
-The `/api/auth/verify` endpoint supports an optional OAuth-style `scope` value per token. The consumer sends the scope when requesting a token, and the service copies it into the JWT that it issues.
+Scopes are authorization labels managed by administrators. They are global per `device_id`: the same active scope set is used whenever that device receives a token, regardless of the allowlisted `client_id` audience. The auth service does not accept scope from the client, device, or user during verification.
 
-### Request contract
+### Scope lifecycle
 
-Example verify request with scope:
+1. An administrator creates a unique scope name in `/admin/scopes`, such as `profile:read` or `devices:read`.
+2. When creating an invite, the administrator selects zero or more active catalog scopes.
+3. Enrollment copies the selected invite scopes to the new device.
+4. After enrollment, the administrator can change the device assignment at `/admin/devices/{device_id}/scopes`.
+5. During `/api/auth/verify`, the service loads the device assignment and places active scope names into the signed JWT `scope` claim as a space-delimited string.
+
+The catalog supports disabling and re-enabling names instead of deleting them. Disabled scopes remain stored and assigned for auditability, but are omitted from newly issued JWTs. Existing JWTs are unchanged and remain valid until their normal expiration. A device with no active assignments receives a JWT without a `scope` claim.
+
+### How to determine a device's scopes
+
+There are two valid ways to determine the scope set for a device:
+
+1. **Administrative assignment:** sign in to the admin panel, open `/admin/devices`, find the device by its `device_id`, and select **Edit scopes**. The page shows the active catalog scopes currently assigned to that device. Disabled assignments are also shown as retained assignments, but they are not included in newly issued JWTs. The invite list also shows the scopes selected when each invite was created.
+2. **Runtime token:** after the device completes `/api/auth/challenge` and `/api/auth/verify`, the consumer validates the returned JWT using the public JWKS and reads the signed `scope` claim. This is the effective scope set at issuance time. The token response does not expose scope as a separate JSON field.
+
+There is intentionally no public endpoint that lets a client query a device's scope assignments. Scope assignment is an admin concern; consumers learn the effective authorization context from a cryptographically validated JWT. If the device has no active scopes, the validated JWT has no `scope` claim.
+
+### Verify request contract
+
+The verify request contains no `scope` field:
 
 ```json
 {
   "device_id": "11111111-1111-4111-8111-111111111111",
   "client_id": "app-a",
-  "scope": "profile:read devices:read",
   "signature": "<base64url-ed25519-signature>",
   "timestamp": 1760000000
 }
 ```
 
-The `scope` field is optional and uses a space-delimited format. A request may contain one or multiple scopes, for example:
-
-```text
-profile:read
-profile:read devices:read
-billing:read billing:write
-```
-
-The service does not maintain a scope list, normalize scope values, interpret scope names, or store scopes in the database. It copies the value into the token as provided. `client_id` must still be present in `ALLOWED_CLIENT_IDS`; scope does not replace audience validation.
+Because the JSON decoder rejects unknown fields, sending a client-supplied `scope` returns HTTP 400. `client_id` remains only the JWT audience selector and must be present in `ALLOWED_CLIENT_IDS`; it does not select or grant scopes.
 
 ### Implementation flow
 
-1. The consumer requests a challenge and the device signs the canonical message as usual:
+1. An administrator creates or enables catalog scopes and assigns them through an invite or directly to a device.
+2. The consumer requests a challenge and the device signs the canonical payload:
    `keypair-auth/v1 || device UUID bytes || nonce bytes || timestamp (big-endian int64)`.
-2. The consumer sends the signature, `client_id`, and optional `scope` to `/api/auth/verify`.
-3. The auth service validates the device signature, timestamp, nonce, device status, and `client_id` allowlist as before.
-4. If validation succeeds, the service adds the scope to the JWT `scope` claim and signs the token with EdDSA.
-5. The consumer fetches the JWKS, validates the JWT signature, `kid`, issuer, audience, and time claims, then applies its own scope policy.
+3. The consumer sends the signature and `client_id` to `/api/auth/verify`; it sends no scope.
+4. The auth service validates the device signature, timestamp, nonce, device status, and `client_id` allowlist.
+5. If validation succeeds, the service reads active scopes assigned to the device, joins their names with spaces, and signs the result in the JWT `scope` claim.
+6. The consumer fetches the JWKS, validates the JWT signature, `kid`, issuer, audience, and time claims, then applies its own permission policy.
 
-The scope is **not included in the canonical device signature**. This is intentional: existing device clients remain compatible, and changing the scope only affects the issued token rather than the challenge-response protocol.
+The scope is **not included in the canonical device signature**. Scope assignment is an administrative data change and does not alter device-client signing compatibility. Device scope changes affect newly issued tokens; they do not retroactively modify existing tokens.
 
 ### Issued JWT
 
-If the request contains `scope: "profile:read devices:read"`, the JWT payload includes claims such as:
+For a device assigned `profile:read` and `devices:read`, the JWT payload includes claims such as:
 
 ```json
 {
   "iss": "https://auth.example.internal",
   "sub": "<device-id>",
   "aud": ["app-a"],
-  "scope": "profile:read devices:read",
+  "scope": "devices:read profile:read",
   "device_id": "<device-id>",
   "user_id": "<user-id>",
   "iat": 1760000000,
@@ -88,13 +99,11 @@ If the request contains `scope: "profile:read devices:read"`, the JWT payload in
 }
 ```
 
-The JWT header contains `alg: "EdDSA"` and a `kid` value used to select the public key from JWKS. The `scope` claim is inside the signed JWT, so a consumer can verify that it was not modified after issuance. However, scope is still a request made by the party holding the device private key; the auth service does not assert that the requested scope grants any particular permission.
-
-If `scope` is omitted or empty, the request remains valid and the `scope` claim is omitted from the JWT. Existing tokens without scope remain valid for consumers that only require the audience and standard claims.
+The JWT header contains `alg: "EdDSA"` and a `kid` value used to select the public key from JWKS. The `scope` claim is inside the signed JWT, so a consumer can verify that the administrator-assigned values were not modified after issuance.
 
 ### Consumer policy
 
-Because the auth service only passes scope through, each consumer must define which scopes its application accepts. Example policy:
+The auth service assigns scope values but does not know the permissions represented by an individual consumer application. Each consumer must define which assigned scopes it accepts. For example:
 
 ```text
 app-a: profile:read, devices:read
@@ -121,9 +130,9 @@ allowed := map[string]bool{
     "profile:read": true,
     "devices:read": true,
 }
-for _, requested := range strings.Fields(claims.Scope) {
-    if !allowed[requested] {
-        return fmt.Errorf("scope is not allowed: %s", requested)
+for _, assigned := range strings.Fields(claims.Scope) {
+    if !allowed[assigned] {
+        return fmt.Errorf("scope is not allowed: %s", assigned)
     }
 }
 ```
@@ -132,14 +141,16 @@ The token response JSON does not contain a separate `scope` field. Scope is avai
 
 ### Implementation locations
 
-- `internal/web/api_handlers.go`: accepts `scope` from the `/api/auth/verify` JSON request.
-- `internal/auth/verify.go`: passes scope to token issuance.
-- `internal/auth/jwt.go`: defines the `scope` claim and issues scoped JWTs.
-- `internal/web/docs/openapi.yaml`: defines the OpenAPI contract for the verify request.
-- `examples/consumer-http/README.md`: provides an HTTP request example.
-- `examples/consumer-go/README.md`: documents the Go consumer flow and token validation.
+- `internal/web/admin_handlers.go`: manages the catalog, invite selections, and device assignments.
+- `internal/auth/management.go`: validates scope names and manages assignments.
+- `internal/auth/verify.go`: loads active device scopes and passes them to token issuance.
+- `internal/auth/jwt.go`: defines the signed JWT `scope` claim.
+- `internal/db/migrations/00003_scopes.sql`: stores the catalog, invite assignments, and device assignments.
+- `internal/web/docs/openapi.yaml`: defines the verify request without a client-supplied scope.
+- `examples/consumer-http/README.md`: provides the HTTP device flow.
+- `examples/consumer-go/README.md`: documents local token validation.
 
-Consumers must validate `alg=EdDSA`, `kid`, issuer, exact audience, `iat`, and `exp` locally using JWKS, then enforce their own scope policy. On rotation, retain the previous public key through the maximum token lifetime plus JWKS cache age, then remove it only after that overlap.
+Consumers must validate `alg=EdDSA`, `kid`, issuer, exact audience, `iat`, and `exp` locally using JWKS, then enforce their local permission policy. On rotation, retain the previous public key through the maximum token lifetime plus JWKS cache age, then remove it only after that overlap window.
 
 ## Development
 

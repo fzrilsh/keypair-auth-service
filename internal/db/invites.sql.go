@@ -96,14 +96,19 @@ func (q *Queries) ListInvites(ctx context.Context) ([]ListInvitesRow, error) {
 const redeemInvite = `-- name: RedeemInvite :one
 UPDATE invite_tokens SET used_at = now()
 WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
-RETURNING user_id
+RETURNING invite_id, user_id
 `
 
-func (q *Queries) RedeemInvite(ctx context.Context, tokenHash []byte) (pgtype.UUID, error) {
+type RedeemInviteRow struct {
+	InviteID pgtype.UUID `json:"invite_id"`
+	UserID   pgtype.UUID `json:"user_id"`
+}
+
+func (q *Queries) RedeemInvite(ctx context.Context, tokenHash []byte) (RedeemInviteRow, error) {
 	row := q.db.QueryRow(ctx, redeemInvite, tokenHash)
-	var user_id pgtype.UUID
-	err := row.Scan(&user_id)
-	return user_id, err
+	var i RedeemInviteRow
+	err := row.Scan(&i.InviteID, &i.UserID)
+	return i, err
 }
 
 const removeInvite = `-- name: RemoveInvite :execrows

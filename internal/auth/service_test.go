@@ -132,11 +132,45 @@ func TestRemoveInviteUsesOpaqueIDAndPreservesUsedInvites(t *testing.T) {
 		t.Fatal(err)
 	}
 	expiredID := uuid.New()
-	if err := store.CreateInvite(t.Context(), expiredID, expiredHash, expiredPrefix, uuid.New(), time.Now().Add(-time.Minute)); err != nil {
+	if err := store.CreateInvite(t.Context(), expiredID, expiredHash, expiredPrefix, uuid.New(), time.Now().Add(-time.Minute), nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.RemoveInvite(t.Context(), expiredID); err != nil {
 		t.Fatalf("expired unused invite should be removable: %v", err)
 	}
 	_ = expiredToken
+}
+
+func TestInviteScopesAreCopiedToEnrolledDevice(t *testing.T) {
+	store := NewMemoryStore()
+	service := NewService(store, ServiceConfig{})
+	scope, err := service.CreateScope(t.Context(), "profile:read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invite, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute, scope.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Enroll(t.Context(), EnrollmentInput{InviteToken: invite.Token, PublicKey: public, DeviceName: "scoped-device"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device, ok := store.Device(result.DeviceID)
+	if !ok || len(device.Scopes) != 1 || device.Scopes[0].Name != "profile:read" {
+		t.Fatalf("invite scopes were not copied: %+v", device)
+	}
+}
+
+func TestScopeNamesRejectWhitespaceAndControlCharacters(t *testing.T) {
+	service := NewService(NewMemoryStore(), ServiceConfig{})
+	for _, name := range []string{"profile:\vread", "profile:\fread", "profile:\u00a0read"} {
+		if _, err := service.CreateScope(t.Context(), name); err == nil {
+			t.Fatalf("expected invalid scope name %q", name)
+		}
+	}
 }

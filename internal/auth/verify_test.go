@@ -63,19 +63,36 @@ func TestVerifyIssuesEdDSAToken(t *testing.T) {
 	if err := store.Approve(deviceID); err != nil {
 		t.Fatal(err)
 	}
+	scopeA, err := service.CreateScope(t.Context(), "profile:read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	scopeB, err := service.CreateScope(t.Context(), "devices:read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ReplaceDeviceScopes(t.Context(), deviceID, []uuid.UUID{scopeA.ID, scopeB.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.DisableScope(t.Context(), scopeB.ID); err != nil {
+		t.Fatal(err)
+	}
 	challenge, err := service.Challenge(context.Background(), deviceID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	timestamp := time.Now().Unix()
 	signature := ed25519.Sign(private, CanonicalMessage(deviceID, challenge.Nonce, timestamp))
-	result, err := service.Verify(context.Background(), VerifyInput{DeviceID: deviceID, ClientID: "app-a", Scope: "profile:read devices:read", Signature: signature, Timestamp: timestamp})
+	result, err := service.Verify(context.Background(), VerifyInput{DeviceID: deviceID, ClientID: "app-a", Signature: signature, Timestamp: timestamp})
 	if err != nil {
 		t.Fatal(err)
 	}
 	claims, err := ParseAndValidateJWT(service.cfg.Keys, "test-service", "app-a", result.AccessToken, time.Now())
-	if err != nil || claims.Scope != "profile:read devices:read" {
-		t.Fatalf("unexpected scope claim: %v %+v", err, claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claims.Scope != "profile:read" {
+		t.Fatalf("unexpected scope claim: %q", claims.Scope)
 	}
 }
 

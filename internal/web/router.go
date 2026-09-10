@@ -47,13 +47,18 @@ func NewRouter(deps Dependencies) http.Handler {
 		})
 	}
 	adminGroup.Get("/devices", deps.Admin.Devices)
+	adminGroup.Get("/devices/{id}/scopes", deps.Admin.DeviceScopes)
 	adminGroup.Get("/invites", deps.Admin.Invites)
+	adminGroup.Get("/scopes", deps.Admin.Scopes)
 	if deps.AdminSessions != nil {
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/invites", deps.Admin.CreateInvite)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/invites/{id}/remove", deps.Admin.RemoveInvite)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/logout", deps.Admin.Logout)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/devices/{id}/approve", deps.Admin.Approve)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/devices/{id}/revoke", deps.Admin.Revoke)
+		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/devices/{id}/scopes", deps.Admin.ReplaceDeviceScopes)
+		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/scopes", deps.Admin.CreateScope)
+		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/scopes/{id}/{action}", deps.Admin.ToggleScope)
 	}
 	adminGroup.Get("/docs", func(w http.ResponseWriter, req *http.Request) { docs.Handler().ServeHTTP(w, req) })
 	adminGroup.Get("/docs/openapi.yaml", func(w http.ResponseWriter, req *http.Request) { docs.SpecHandler().ServeHTTP(w, req) })
