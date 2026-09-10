@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"testing"
 	"time"
@@ -131,5 +132,15 @@ func TestUnknownClientDoesNotConsumeNonce(t *testing.T) {
 	again, err := service.Challenge(context.Background(), deviceID)
 	if err != nil || string(again.Nonce) != string(challenge.Nonce) {
 		t.Fatalf("expected nonce preservation, got %+v %v", again, err)
+	}
+}
+
+func TestTokenResultUsesOpenAPIJSONFieldNames(t *testing.T) {
+	encoded, err := json.Marshal(TokenResult{AccessToken: "token", TokenType: "Bearer", ExpiresIn: 900})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"access_token":"token","token_type":"Bearer","expires_in":900}` {
+		t.Fatalf("unexpected token response JSON: %s", encoded)
 	}
 }

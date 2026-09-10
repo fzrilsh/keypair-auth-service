@@ -2,7 +2,9 @@
 .env
 .env.*
 !.env.example
-bin
+bin/*
+!bin/
+!bin/server
 dist
 tmp
 *.test

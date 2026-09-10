@@ -1,0 +1,74 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install pinned generators
+        run: |
+          go install github.com/a-h/templ/cmd/templ@v0.3.1020
+          go install github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Verify
+        run: make verify
+
+      - name: Build deployment binary
+        run: |
+          mkdir -p bin
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/server ./cmd/server
+
+      # Dockerfile.runtime copies the binary built on GitHub; the VPS does not compile Go.
+      - name: Sync application artifact to VPS
+        uses: burnett01/rsync-deployments@7.0.1
+        with:
+          switches: -avz --delete --exclude=.git --exclude='.env*' --exclude=.local --exclude='*.pem' --exclude='*.key' --exclude='*.p12' --exclude='*.pfx' --exclude='*.crt'
+          path: ./
+          remote_path: /home/deploy/services/keypair-auth/
+          remote_host: ${{ secrets.VPS_HOST }}
+          remote_port: 2222
+          remote_user: ${{ secrets.VPS_USER }}
+          remote_key: ${{ secrets.VPS_SSH_KEY }}
+
+      - name: Build, migrate, and restart container
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          port: 2222
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          fingerprint: ${{ secrets.VPS_FINGERPRINT }}
+          script: |
+            set -eu
+            cd /home/deploy/services/keypair-auth
+            test -x bin/server
+            docker build --pull -f Dockerfile.runtime -t keypair-auth:latest .
+            cd /home/deploy/infra
+            service_image="$(docker compose config | awk '/^  keypair-auth:$/ { in_service=1; next } in_service && /^  [^ ]/ { exit } in_service && /^    image:/ { print $2; exit }')"
+            if [ "$service_image" != "keypair-auth:latest" ]; then
+              echo "keypair-auth Compose service must declare image: keypair-auth:latest" >&2
+              exit 1
+            fi
+            docker compose run --rm --no-deps --pull never --entrypoint /server keypair-auth migrate
+            docker compose up -d --no-deps --no-build keypair-auth
+            docker image prune -f

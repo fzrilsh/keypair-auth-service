@@ -65,6 +65,18 @@ curl -f http://localhost:8080/.well-known/jwks.json
 
 The Compose stack uses PostgreSQL service `postgres`, generates the local Ed25519 key in the ignored Docker volume `jwtkeys`, runs migrations once through the `migrate` service, and starts `app` only after key initialization and migration succeed. The app mounts the key volume read-only. The key never enters the image, host repository, or Git history.
 
+The production deployment workflow compiles a static Linux `amd64` `bin/server` binary on GitHub Actions, syncs that artifact together with `Dockerfile.runtime` to the VPS, and builds only the small distroless runtime image there. The VPS does not install Go or compile the application. Its infrastructure Compose file at `/home/deploy/infra` must use the image tag produced by the workflow, rather than Compose's generated project tag:
+
+```yaml
+services:
+  keypair-auth:
+    build: /home/deploy/services/keypair-auth
+    image: keypair-auth:latest
+    restart: unless-stopped
+```
+
+The workflow checks this declaration and fails before migration if the image tag is missing or different. Configure `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`, and `VPS_FINGERPRINT` in GitHub Actions secrets. The remote deployment path and Compose service name must match the workflow.
+
 Create the first local admin after the stack is running. Use a throwaway local password only:
 
 ```sh
@@ -86,3 +98,13 @@ docker-compose down -v
 ```
 
 Override local defaults through an ignored `.env` file or shell environment, for example `HTTP_PORT`, `POSTGRES_PASSWORD`, `ADMIN_SESSION_SECRET`, `ALLOWED_CLIENT_IDS`, and `JWT_ISSUER`. Do not use these local defaults in production. To recreate the disposable signing key, remove the key volume with `docker-compose down -v` before starting the stack again.
+
+## VPS Docker maintenance
+
+The deploy workflow compiles the application on GitHub and builds only the small distroless runtime image on the VPS. BuildKit cache is separate from dangling image cleanup. On the VPS, schedule a weekly maintenance task during a window with no deployment in progress:
+
+```cron
+0 3 * * 0 docker builder prune -f --filter "until=168h" >> /home/deploy/logs/docker-prune.log 2>&1
+```
+
+Create `/home/deploy/logs` first and ensure the cron user has permission to access Docker. This command removes only BuildKit cache older than seven days; it does not replace the post-deploy `docker image prune -f` step.

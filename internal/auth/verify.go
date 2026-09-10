@@ -16,9 +16,9 @@ type VerifyInput struct {
 }
 
 type TokenResult struct {
-	AccessToken string
-	TokenType   string
-	ExpiresIn   int64
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int64  `json:"expires_in"`
 }
 
 func (s *Service) Verify(ctx context.Context, input VerifyInput) (TokenResult, error) {
