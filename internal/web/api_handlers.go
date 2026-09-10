@@ -27,6 +27,7 @@ type enrollRequest struct {
 type verifyRequest struct {
 	DeviceID  string `json:"device_id"`
 	ClientID  string `json:"client_id"`
+	Scope     string `json:"scope,omitempty"`
 	Signature string `json:"signature"`
 	Timestamp int64  `json:"timestamp"`
 }
@@ -80,7 +81,7 @@ func (h APIHandlers) Verify(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusUnauthorized, "invalid_credential", "authentication failed")
 		return
 	}
-	result, err := h.Auth.Verify(r.Context(), auth.VerifyInput{DeviceID: deviceID, ClientID: input.ClientID, Signature: signature, Timestamp: input.Timestamp})
+	result, err := h.Auth.Verify(r.Context(), auth.VerifyInput{DeviceID: deviceID, ClientID: input.ClientID, Scope: input.Scope, Signature: signature, Timestamp: input.Timestamp})
 	if err != nil {
 		h.writeAuthError(w, err)
 		return

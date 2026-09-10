@@ -69,12 +69,13 @@ func TestVerifyIssuesEdDSAToken(t *testing.T) {
 	}
 	timestamp := time.Now().Unix()
 	signature := ed25519.Sign(private, CanonicalMessage(deviceID, challenge.Nonce, timestamp))
-	result, err := service.Verify(context.Background(), VerifyInput{DeviceID: deviceID, ClientID: "app-a", Signature: signature, Timestamp: timestamp})
+	result, err := service.Verify(context.Background(), VerifyInput{DeviceID: deviceID, ClientID: "app-a", Scope: "profile:read devices:read", Signature: signature, Timestamp: timestamp})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ParseAndValidateJWT(service.cfg.Keys, "test-service", "app-a", result.AccessToken, time.Now()); err != nil {
-		t.Fatal(err)
+	claims, err := ParseAndValidateJWT(service.cfg.Keys, "test-service", "app-a", result.AccessToken, time.Now())
+	if err != nil || claims.Scope != "profile:read devices:read" {
+		t.Fatalf("unexpected scope claim: %v %+v", err, claims)
 	}
 }
 

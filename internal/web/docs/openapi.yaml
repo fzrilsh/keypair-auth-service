@@ -117,6 +117,7 @@ components:
       properties:
         device_id: { type: string, format: uuid }
         client_id: { type: string, description: Allowlisted consumer app audience }
+        scope: { type: string, description: Optional opaque space-delimited scope string copied into the signed JWT scope claim; authorization is enforced by the consumer }
         signature: { type: string, description: Ed25519 signature encoded as unpadded base64url }
         timestamp: { type: integer, format: int64 }
     JWK:

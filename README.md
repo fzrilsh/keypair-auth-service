@@ -27,12 +27,119 @@ The previous file is a public PKIX PEM and the active file is a private PKCS#8 P
 
 - `POST /api/devices/enroll`: consume a one-time invite and register a public key as pending
 - `GET /api/auth/challenge?device_id=...`: obtain a one-time nonce for an approved device
-- `POST /api/auth/verify`: submit the device signature and `client_id`, receiving a 15-minute Bearer JWT
+- `POST /api/auth/verify`: submit the device signature and `client_id`, optionally including an opaque space-delimited `scope`; receives a 15-minute Bearer JWT with that scope claim
 - `GET /.well-known/jwks.json`: public active/previous Ed25519 keys; no admin session required
 - `/admin/*`: browser session-protected device and invite administration
 - `/admin/docs`: session-protected Swagger UI and OpenAPI YAML
 
-Consumers must validate `alg=EdDSA`, `kid`, issuer, exact audience, `iat`, and `exp` locally using JWKS. On rotation, retain the previous public key through the maximum token lifetime plus JWKS cache age, then remove it only after that overlap.
+## Scope pada JWT
+
+Endpoint `/api/auth/verify` mendukung optional OAuth-style `scope` per token. Scope dikirim oleh consumer saat meminta token dan diteruskan ke JWT yang diterbitkan service.
+
+### Kontrak request
+
+Contoh request verify dengan scope:
+
+```json
+{
+  "device_id": "11111111-1111-4111-8111-111111111111",
+  "client_id": "app-a",
+  "scope": "profile:read devices:read",
+  "signature": "<base64url-ed25519-signature>",
+  "timestamp": 1760000000
+}
+```
+
+Field `scope` adalah string optional dan menggunakan format space-delimited. Satu request dapat meminta satu atau beberapa scope, misalnya:
+
+```text
+profile:read
+profile:read devices:read
+billing:read billing:write
+```
+
+Service tidak memiliki daftar scope, tidak melakukan normalisasi, tidak mengartikan nama scope, dan tidak menyimpan scope ke database. Nilainya diteruskan apa adanya ke token. `client_id` tetap wajib terdaftar di `ALLOWED_CLIENT_IDS`; scope tidak menggantikan validasi audience tersebut.
+
+### Alur implementasi
+
+1. Consumer membuat request challenge dan device menandatangani canonical message seperti biasa:
+   `keypair-auth/v1 || device UUID bytes || nonce bytes || timestamp (big-endian int64)`.
+2. Consumer mengirim signature, `client_id`, dan optional `scope` ke `/api/auth/verify`.
+3. Auth service memvalidasi device signature, timestamp, nonce, status device, dan allowlist `client_id` seperti sebelumnya.
+4. Jika valid, service memasukkan scope ke claim JWT `scope` lalu menandatangani token dengan EdDSA.
+5. Consumer mengambil JWKS dan memvalidasi signature JWT, `kid`, issuer, audience, waktu berlaku, lalu menerapkan policy scope miliknya sendiri.
+
+Scope **tidak dimasukkan ke canonical device signature**. Ini sengaja dipertahankan agar client device lama tetap kompatibel dan agar perubahan scope hanya memengaruhi token yang diterbitkan, bukan protocol challenge-response.
+
+### JWT yang dihasilkan
+
+Jika request berisi `scope: "profile:read devices:read"`, payload JWT akan memiliki claim seperti berikut:
+
+```json
+{
+  "iss": "https://auth.example.internal",
+  "sub": "<device-id>",
+  "aud": ["app-a"],
+  "scope": "profile:read devices:read",
+  "device_id": "<device-id>",
+  "user_id": "<user-id>",
+  "iat": 1760000000,
+  "exp": 1760000900
+}
+```
+
+The JWT header contains `alg: "EdDSA"` and a `kid` value used to select the public key from JWKS. `scope` berada di dalam JWT yang ditandatangani, sehingga consumer dapat memastikan nilainya tidak diubah setelah token diterbitkan. Namun, scope tetap merupakan request dari pihak yang memiliki private key device; auth service tidak menyatakan bahwa scope tersebut memiliki izin tertentu.
+
+Jika `scope` tidak dikirim atau nilainya kosong, request tetap valid dan claim `scope` tidak ditulis ke JWT. Token lama tanpa scope tetap valid untuk consumer yang hanya memerlukan audience dan claim standar.
+
+### Policy di consumer
+
+Karena auth service hanya meneruskan scope, setiap consumer harus menentukan scope yang boleh digunakan oleh aplikasinya. Contoh policy sederhana:
+
+```text
+app-a: profile:read, devices:read
+app-b: billing:read
+```
+
+Consumer sebaiknya:
+
+- memvalidasi JWT secara cryptographic menggunakan JWKS, bukan hanya decode payload;
+- memvalidasi exact `aud` sebelum membaca scope;
+- membaca scope dengan pemisah spasi, misalnya `strings.Fields(claims.Scope)` di Go;
+- menolak token jika scope wajib tidak ada atau ada scope yang tidak dikenal oleh policy consumer;
+- tidak memberikan akses hanya karena scope tertulis di token tanpa membandingkannya dengan policy lokal.
+
+Contoh pemeriksaan di consumer Go:
+
+```go
+claims, err := verifier.Verify(ctx, rawToken, time.Now())
+if err != nil {
+    return err
+}
+
+allowed := map[string]bool{
+    "profile:read": true,
+    "devices:read": true,
+}
+for _, requested := range strings.Fields(claims.Scope) {
+    if !allowed[requested] {
+        return fmt.Errorf("scope is not allowed: %s", requested)
+    }
+}
+```
+
+Tidak ada field `scope` tambahan di response JSON token. Scope hanya tersedia sebagai claim di `access_token`; consumer harus memvalidasi dan membaca claim tersebut setelah token berhasil diverifikasi.
+
+### Lokasi implementasi
+
+- `internal/web/api_handlers.go`: menerima `scope` dari JSON `/api/auth/verify`.
+- `internal/auth/verify.go`: meneruskan scope ke proses penerbitan token.
+- `internal/auth/jwt.go`: mendefinisikan claim `scope` dan menerbitkan JWT scoped.
+- `internal/web/docs/openapi.yaml`: kontrak OpenAPI untuk request verify.
+- `examples/consumer-http/README.md`: contoh request HTTP.
+- `examples/consumer-go/README.md`: alur consumer Go dan validasi token.
+
+Consumers must validate `alg=EdDSA`, `kid`, issuer, exact audience, `iat`, and `exp` locally using JWKS, then enforce their own scope policy. On rotation, retain the previous public key through the maximum token lifetime plus JWKS cache age, then remove it only after that overlap.
 
 ## Development
 

@@ -14,10 +14,16 @@ import (
 type Claims struct {
 	DeviceID string `json:"device_id"`
 	UserID   string `json:"user_id"`
+	Scope    string `json:"scope,omitempty"`
 	jwt.RegisteredClaims
 }
 
+// IssueDeviceJWT issues a token without a scope for callers that do not need one.
 func IssueDeviceJWT(keys SigningKeys, issuer, clientID string, device Device, lifetime time.Duration, now time.Time) (string, error) {
+	return IssueDeviceJWTWithScope(keys, issuer, clientID, device, "", lifetime, now)
+}
+
+func IssueDeviceJWTWithScope(keys SigningKeys, issuer, clientID string, device Device, scope string, lifetime time.Duration, now time.Time) (string, error) {
 	if len(keys.ActivePrivate) != ed25519.PrivateKeySize || len(keys.ActivePublic) != ed25519.PublicKeySize || !ed25519.PublicKey(keys.ActivePrivate.Public().(ed25519.PublicKey)).Equal(keys.ActivePublic) || !validKID(keys.ActiveKID) || issuer == "" || clientID == "" || lifetime <= 0 {
 		return "", fmt.Errorf("invalid JWT signing configuration")
 	}
@@ -26,7 +32,7 @@ func IssueDeviceJWT(keys SigningKeys, issuer, clientID string, device Device, li
 		return "", err
 	}
 	claims := Claims{
-		DeviceID: device.ID.String(), UserID: device.UserID.String(),
+		DeviceID: device.ID.String(), UserID: device.UserID.String(), Scope: scope,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer: issuer, Subject: device.ID.String(), ID: hex.EncodeToString(jtiBytes[:]),
 			Audience: jwt.ClaimStrings{clientID}, IssuedAt: jwt.NewNumericDate(now), ExpiresAt: jwt.NewNumericDate(now.Add(lifetime)),

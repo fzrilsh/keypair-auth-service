@@ -11,6 +11,7 @@ import (
 type VerifyInput struct {
 	DeviceID  uuid.UUID
 	ClientID  string
+	Scope     string
 	Signature []byte
 	Timestamp int64
 }
@@ -44,7 +45,7 @@ func (s *Service) Verify(ctx context.Context, input VerifyInput) (TokenResult, e
 	if err != nil {
 		return TokenResult{}, err
 	}
-	token, err := IssueDeviceJWT(s.cfg.Keys, s.cfg.Issuer, input.ClientID, device, s.cfg.JWTLifetime, now)
+	token, err := IssueDeviceJWTWithScope(s.cfg.Keys, s.cfg.Issuer, input.ClientID, device, input.Scope, s.cfg.JWTLifetime, now)
 	if err != nil {
 		return TokenResult{}, err
 	}
