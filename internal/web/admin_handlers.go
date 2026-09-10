@@ -99,6 +99,22 @@ func (h AdminHandlers) CreateInvite(w http.ResponseWriter, r *http.Request) {
 	_ = inviteCreatedTemplate.Execute(w, data)
 }
 
+func (h AdminHandlers) RemoveInvite(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if err := h.Auth.RemoveInvite(r.Context(), id); errors.Is(err, auth.ErrConflict) {
+		http.Error(w, "invite cannot be removed", http.StatusConflict)
+		return
+	} else if err != nil {
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/admin/invites", http.StatusFound)
+}
+
 func (h AdminHandlers) Approve(w http.ResponseWriter, r *http.Request) { h.transition(w, r, true) }
 func (h AdminHandlers) Revoke(w http.ResponseWriter, r *http.Request)  { h.transition(w, r, false) }
 
@@ -158,5 +174,5 @@ func renderLogin(w http.ResponseWriter, message string) {
 }
 
 var devicesTemplate = template.Must(template.New("devices").Parse(`<!doctype html><title>Devices</title><link rel="stylesheet" href="/static/app.css"><h1>Devices</h1><nav><a href="/admin/invites">Invites</a> <a href="/admin/docs">API docs</a></nav><table><tr><th>ID</th><th>User</th><th>Status</th><th>Action</th></tr>{{range .Devices}}<tr><td>{{.ID}}</td><td>{{.UserID}}</td><td>{{.Status}}</td><td>{{if eq .Status "pending"}}<form method="post" action="/admin/devices/{{.ID}}/approve"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button>Approve</button></form>{{else if eq .Status "approved"}}<form method="post" action="/admin/devices/{{.ID}}/revoke"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button>Revoke</button></form>{{end}}</td></tr>{{end}}</table><form method="post" action="/admin/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button>Logout</button></form>`))
-var invitesTemplate = template.Must(template.New("invites").Parse(`<!doctype html><title>Invites</title><link rel="stylesheet" href="/static/app.css"><h1>Invites</h1><form method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label>User UUID <input name="user_id" required></label><button>Generate invite</button></form><table><tr><th>Prefix</th><th>User</th><th>Expires</th><th>Used</th></tr>{{range .Invites}}<tr><td>{{.Prefix}}</td><td>{{.UserID}}</td><td>{{.ExpiresAt}}</td><td>{{.UsedAt}}</td></tr>{{end}}</table>`))
+var invitesTemplate = template.Must(template.New("invites").Parse(`<!doctype html><title>Invites</title><link rel="stylesheet" href="/static/app.css"><h1>Invites</h1><form method="post"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><label>User UUID <input name="user_id" required></label><button>Generate invite</button></form><table><tr><th>Prefix</th><th>User</th><th>Expires</th><th>Used</th><th>Action</th></tr>{{range .Invites}}<tr><td>{{.Prefix}}</td><td>{{.UserID}}</td><td>{{.ExpiresAt}}</td><td>{{.UsedAt}}</td><td>{{if not .UsedAt}}<form method="post" action="/admin/invites/{{.ID}}/remove"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><button>Remove</button></form>{{end}}</td></tr>{{end}}</table>`))
 var inviteCreatedTemplate = template.Must(template.New("invite-created").Parse(`<!doctype html><title>Invite created</title><h1>Invite created</h1><p>Copy this token now. It cannot be retrieved later:</p><textarea readonly rows="3" cols="64">{{.Invite.Token}}</textarea><p>Prefix: {{.Invite.Prefix}} — expires: {{.Invite.ExpiresAt}}</p><a href="/admin/invites">Back</a>`))

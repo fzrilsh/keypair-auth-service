@@ -44,3 +44,45 @@ make build
 ```
 
 `migrate` and `bootstrap-admin` require only `DATABASE_URL` because they do not issue device tokens. PostgreSQL-backed concurrency and end-to-end checks should use a disposable database, never a developer or production database.
+
+## Local Docker Compose
+
+Prerequisites: Docker Desktop (or Docker Engine) with the Compose v2 command `docker-compose`.
+
+Initialize a disposable signing key inside a local Docker volume and start PostgreSQL, migrations, and the API:
+
+```sh
+make local-init
+docker-compose up --build
+```
+
+The API is available at `http://localhost:8080`. In another terminal, verify the service and public JWKS endpoint:
+
+```sh
+curl -f http://localhost:8080/readyz
+curl -f http://localhost:8080/.well-known/jwks.json
+```
+
+The Compose stack uses PostgreSQL service `postgres`, generates the local Ed25519 key in the ignored Docker volume `jwtkeys`, runs migrations once through the `migrate` service, and starts `app` only after key initialization and migration succeed. The app mounts the key volume read-only. The key never enters the image, host repository, or Git history.
+
+Create the first local admin after the stack is running. Use a throwaway local password only:
+
+```sh
+printf '%s\n' 'local-admin-password-change-me' | \
+  docker-compose exec -T app /server bootstrap-admin \
+  --email admin@example.test --password-stdin
+```
+
+Stop the stack while keeping the PostgreSQL volume:
+
+```sh
+make local-down
+```
+
+To reset the disposable database completely, use the destructive command below only for local testing:
+
+```sh
+docker-compose down -v
+```
+
+Override local defaults through an ignored `.env` file or shell environment, for example `HTTP_PORT`, `POSTGRES_PASSWORD`, `ADMIN_SESSION_SECRET`, `ALLOWED_CLIENT_IDS`, and `JWT_ISSUER`. Do not use these local defaults in production. To recreate the disposable signing key, remove the key volume with `docker-compose down -v` before starting the stack again.

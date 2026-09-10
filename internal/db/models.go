@@ -46,4 +46,5 @@ type InviteToken struct {
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	UsedAt      pgtype.Timestamptz `json:"used_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	InviteID    pgtype.UUID        `json:"invite_id"`
 }

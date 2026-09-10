@@ -29,11 +29,12 @@ func (q *Queries) CleanupInvites(ctx context.Context, arg CleanupInvitesParams) 
 }
 
 const insertInvite = `-- name: InsertInvite :exec
-INSERT INTO invite_tokens (token_hash, token_prefix, user_id, expires_at)
-VALUES ($1, $2, $3, $4)
+INSERT INTO invite_tokens (invite_id, token_hash, token_prefix, user_id, expires_at)
+VALUES ($1, $2, $3, $4, $5)
 `
 
 type InsertInviteParams struct {
+	InviteID    pgtype.UUID        `json:"invite_id"`
 	TokenHash   []byte             `json:"token_hash"`
 	TokenPrefix string             `json:"token_prefix"`
 	UserID      pgtype.UUID        `json:"user_id"`
@@ -42,6 +43,7 @@ type InsertInviteParams struct {
 
 func (q *Queries) InsertInvite(ctx context.Context, arg InsertInviteParams) error {
 	_, err := q.db.Exec(ctx, insertInvite,
+		arg.InviteID,
 		arg.TokenHash,
 		arg.TokenPrefix,
 		arg.UserID,
@@ -51,11 +53,12 @@ func (q *Queries) InsertInvite(ctx context.Context, arg InsertInviteParams) erro
 }
 
 const listInvites = `-- name: ListInvites :many
-SELECT token_prefix, user_id, expires_at, used_at, created_at
+SELECT invite_id, token_prefix, user_id, expires_at, used_at, created_at
 FROM invite_tokens ORDER BY created_at DESC
 `
 
 type ListInvitesRow struct {
+	InviteID    pgtype.UUID        `json:"invite_id"`
 	TokenPrefix string             `json:"token_prefix"`
 	UserID      pgtype.UUID        `json:"user_id"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
@@ -73,6 +76,7 @@ func (q *Queries) ListInvites(ctx context.Context) ([]ListInvitesRow, error) {
 	for rows.Next() {
 		var i ListInvitesRow
 		if err := rows.Scan(
+			&i.InviteID,
 			&i.TokenPrefix,
 			&i.UserID,
 			&i.ExpiresAt,
@@ -100,4 +104,16 @@ func (q *Queries) RedeemInvite(ctx context.Context, tokenHash []byte) (pgtype.UU
 	var user_id pgtype.UUID
 	err := row.Scan(&user_id)
 	return user_id, err
+}
+
+const removeInvite = `-- name: RemoveInvite :execrows
+DELETE FROM invite_tokens WHERE invite_id = $1 AND used_at IS NULL
+`
+
+func (q *Queries) RemoveInvite(ctx context.Context, inviteID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, removeInvite, inviteID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

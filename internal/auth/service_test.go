@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 	"time"
 
@@ -67,4 +68,75 @@ func TestChallengeRequiresApproval(t *testing.T) {
 	if err != nil || string(again.Nonce) != string(challenge.Nonce) {
 		t.Fatalf("expected stable active nonce: %+v %v", again, err)
 	}
+}
+
+func TestRemoveInviteUsesOpaqueIDAndPreservesUsedInvites(t *testing.T) {
+	service, store, _, _ := newTestService(t)
+	created, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invites, err := service.ListInvites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var createdID uuid.UUID
+	for _, invite := range invites {
+		if invite.Prefix == created.Prefix {
+			createdID = invite.ID
+			break
+		}
+	}
+	if createdID == uuid.Nil {
+		t.Fatal("expected an opaque invite ID")
+	}
+	if err := service.RemoveInvite(t.Context(), createdID); err != nil {
+		t.Fatalf("remove invite: %v", err)
+	}
+	if err := service.RemoveInvite(t.Context(), createdID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected repeated remove conflict, got %v", err)
+	}
+
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	used, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Enroll(t.Context(), EnrollmentInput{InviteToken: used.Token, PublicKey: public, DeviceName: "used"}); err != nil {
+		t.Fatal(err)
+	}
+	invites, err = service.ListInvites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var usedID uuid.UUID
+	for _, invite := range invites {
+		if invite.Prefix == used.Prefix {
+			usedID = invite.ID
+			break
+		}
+	}
+	if usedID == uuid.Nil {
+		t.Fatal("expected used invite ID")
+	}
+	if err := service.RemoveInvite(t.Context(), usedID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("expected used invite conflict, got %v", err)
+	}
+
+	expiredToken, expiredHash, expiredPrefix, err := GenerateInviteToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredID := uuid.New()
+	if err := store.CreateInvite(t.Context(), expiredID, expiredHash, expiredPrefix, uuid.New(), time.Now().Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RemoveInvite(t.Context(), expiredID); err != nil {
+		t.Fatalf("expired unused invite should be removable: %v", err)
+	}
+	_ = expiredToken
 }

@@ -29,7 +29,7 @@ func (s *Service) CreateInvite(ctx context.Context, userID uuid.UUID, lifetime t
 		return InviteResult{}, err
 	}
 	expiresAt := time.Now().Add(lifetime)
-	if err := s.store.CreateInvite(ctx, hash, prefix, userID, expiresAt); err != nil {
+	if err := s.store.CreateInvite(ctx, uuid.New(), hash, prefix, userID, expiresAt); err != nil {
 		return InviteResult{}, err
 	}
 	return InviteResult{Token: plain, Prefix: prefix, UserID: userID, ExpiresAt: expiresAt}, nil
@@ -41,6 +41,16 @@ func (s *Service) ListDevices(ctx context.Context) ([]Device, error) {
 
 func (s *Service) ListInvites(ctx context.Context) ([]Invite, error) {
 	return s.store.ListInvites(ctx)
+}
+
+func (s *Service) RemoveInvite(ctx context.Context, id uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id == uuid.Nil {
+		return ErrConflict
+	}
+	return s.store.RemoveInvite(ctx, id)
 }
 
 func (s *Service) Approve(ctx context.Context, id uuid.UUID) error {

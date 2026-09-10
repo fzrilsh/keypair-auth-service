@@ -24,11 +24,22 @@ func NewPostgresStore(pool *pgxpool.Pool) *PostgresStore {
 	return &PostgresStore{pool: pool, queries: db.New(pool)}
 }
 
-func (s *PostgresStore) CreateInvite(ctx context.Context, hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time) error {
+func (s *PostgresStore) CreateInvite(ctx context.Context, id uuid.UUID, hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time) error {
 	return s.queries.InsertInvite(ctx, db.InsertInviteParams{
-		TokenHash: hash, TokenPrefix: prefix, UserID: toPGUUID(userID),
+		InviteID: toPGUUID(id), TokenHash: hash, TokenPrefix: prefix, UserID: toPGUUID(userID),
 		ExpiresAt: toPGTime(expiresAt),
 	})
+}
+
+func (s *PostgresStore) RemoveInvite(ctx context.Context, id uuid.UUID) error {
+	rows, err := s.queries.RemoveInvite(ctx, toPGUUID(id))
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return ErrConflict
+	}
+	return nil
 }
 
 func (s *PostgresStore) EnrollDevice(ctx context.Context, tokenHash []byte, publicKey ed25519.PublicKey, deviceName string) (Device, error) {
@@ -140,6 +151,9 @@ func (s *PostgresStore) ListInvites(ctx context.Context) ([]Invite, error) {
 	invites := make([]Invite, 0, len(rows))
 	for _, row := range rows {
 		invite := Invite{Prefix: row.TokenPrefix}
+		if row.InviteID.Valid {
+			invite.ID = uuid.UUID(row.InviteID.Bytes)
+		}
 		if row.UserID.Valid {
 			invite.UserID = uuid.UUID(row.UserID.Bytes)
 		}

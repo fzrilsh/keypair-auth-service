@@ -31,6 +31,7 @@ type Device struct {
 }
 
 type Invite struct {
+	ID        uuid.UUID
 	Prefix    string
 	UserID    uuid.UUID
 	ExpiresAt time.Time
@@ -39,7 +40,8 @@ type Invite struct {
 }
 
 type AuthStore interface {
-	CreateInvite(context.Context, []byte, string, uuid.UUID, time.Time) error
+	CreateInvite(context.Context, uuid.UUID, []byte, string, uuid.UUID, time.Time) error
+	RemoveInvite(context.Context, uuid.UUID) error
 	EnrollDevice(context.Context, []byte, ed25519.PublicKey, string) (Device, error)
 	IssueChallenge(context.Context, uuid.UUID, time.Duration) (ChallengeResult, error)
 	VerifyDevice(context.Context, VerifyInput, time.Time, time.Duration, func(Device, []byte) bool) (Device, error)
@@ -50,6 +52,7 @@ type AuthStore interface {
 }
 
 type invite struct {
+	id        uuid.UUID
 	hash      []byte
 	prefix    string
 	userID    uuid.UUID
@@ -75,14 +78,33 @@ func NewMemoryStore() *MemoryStore {
 }
 
 func (s *MemoryStore) AddInvite(hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time) {
-	_ = s.CreateInvite(context.Background(), hash, prefix, userID, expiresAt)
+	_ = s.CreateInvite(context.Background(), uuid.New(), hash, prefix, userID, expiresAt)
 }
 
-func (s *MemoryStore) CreateInvite(_ context.Context, hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time) error {
+func (s *MemoryStore) CreateInvite(_ context.Context, id uuid.UUID, hash []byte, prefix string, userID uuid.UUID, expiresAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.invites[string(hash)] = invite{hash: append([]byte(nil), hash...), prefix: prefix, userID: userID, expiresAt: expiresAt, createdAt: time.Now()}
+	s.invites[string(hash)] = invite{id: id, hash: append([]byte(nil), hash...), prefix: prefix, userID: userID, expiresAt: expiresAt, createdAt: time.Now()}
 	return nil
+}
+
+func (s *MemoryStore) RemoveInvite(ctx context.Context, id uuid.UUID) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for hash, invite := range s.invites {
+		if invite.id != id {
+			continue
+		}
+		if invite.usedAt != nil {
+			return ErrConflict
+		}
+		delete(s.invites, hash)
+		return nil
+	}
+	return ErrConflict
 }
 
 func (s *MemoryStore) Device(id uuid.UUID) (Device, bool) {
@@ -189,7 +211,7 @@ func (s *MemoryStore) ListInvites(ctx context.Context) ([]Invite, error) {
 	defer s.mu.Unlock()
 	invites := make([]Invite, 0, len(s.invites))
 	for _, value := range s.invites {
-		invites = append(invites, Invite{Prefix: value.prefix, UserID: value.userID, ExpiresAt: value.expiresAt, UsedAt: value.usedAt, CreatedAt: value.createdAt})
+		invites = append(invites, Invite{ID: value.id, Prefix: value.prefix, UserID: value.userID, ExpiresAt: value.expiresAt, UsedAt: value.usedAt, CreatedAt: value.createdAt})
 	}
 	sort.Slice(invites, func(i, j int) bool { return invites[i].CreatedAt.After(invites[j].CreatedAt) })
 	return invites, nil

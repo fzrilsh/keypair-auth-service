@@ -25,3 +25,6 @@ coverage.html
 .DS_Store
 .vscode/
 .idea/
+
+# Local Docker Compose state and secrets
+.local/

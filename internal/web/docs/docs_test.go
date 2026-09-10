@@ -31,8 +31,8 @@ func TestHandlerUsesSameOriginSpecAndNoStore(t *testing.T) {
 		t.Fatalf("status %d", res.Code)
 	}
 	body := res.Body.String()
-	if !strings.Contains(body, `url: "/admin/docs/openapi.yaml"`) {
-		t.Fatal("missing same-origin spec URL")
+	if !strings.Contains(body, `/admin/docs/assets/swagger-ui-init.js`) {
+		t.Fatal("missing same-origin Swagger bootstrap URL")
 	}
 	if strings.Contains(body, "http://") || strings.Contains(body, "https://") {
 		t.Fatal("docs page contains remote URL")
@@ -68,5 +68,22 @@ func TestSpecDocumentsMultiAppJWTContract(t *testing.T) {
 		if !strings.Contains(string(Spec), expected) {
 			t.Fatalf("OpenAPI spec missing %q", expected)
 		}
+	}
+}
+
+func TestHandlerUsesExternalCSPCompatibleBootstrap(t *testing.T) {
+	res := httptest.NewRecorder()
+	Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/admin/docs", nil))
+	body := res.Body.String()
+	if !strings.Contains(body, "/admin/docs/assets/swagger-ui-init.js") {
+		t.Fatal("missing external Swagger bootstrap asset")
+	}
+	if strings.Contains(body, "<script>window.ui") {
+		t.Fatal("Swagger bootstrap must not be inline under the current CSP")
+	}
+	asset := httptest.NewRecorder()
+	AssetHandler().ServeHTTP(asset, httptest.NewRequest(http.MethodGet, "/swagger-ui-init.js", nil))
+	if asset.Code != http.StatusOK || !strings.Contains(asset.Header().Get("Content-Type"), "javascript") || !strings.Contains(asset.Body.String(), "SwaggerUIBundle") {
+		t.Fatalf("unexpected bootstrap asset response: %d %q", asset.Code, asset.Body.String())
 	}
 }

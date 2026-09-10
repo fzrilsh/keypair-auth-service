@@ -1,4 +1,4 @@
-.PHONY: generate build test verify migrate
+.PHONY: generate build test verify migrate local-init local-up local-down
 
 generate:
 	templ generate
@@ -20,3 +20,12 @@ verify: generate
 
 migrate: build
 	./bin/server migrate
+
+local-init:
+	docker-compose run --rm key-init
+
+local-up: local-init
+	docker-compose up --build
+
+local-down:
+	docker-compose down

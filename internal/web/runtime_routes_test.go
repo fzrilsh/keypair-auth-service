@@ -85,3 +85,93 @@ func TestJWKSRouteIsPublic(t *testing.T) {
 		t.Fatalf("unexpected JWKS response: %d %q", response.Code, response.Body.String())
 	}
 }
+
+func TestRemoveInviteRouteRequiresCSRFAndUsesOpaqueID(t *testing.T) {
+	router, service, _, sessions := newRouterFixture(t)
+	created, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invites, err := service.ListInvites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invites) != 1 || invites[0].ID == uuid.Nil {
+		t.Fatalf("unexpected invites: %+v", invites)
+	}
+	inviteID := invites[0].ID
+
+	session, err := sessions.Create(uuid.New(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := "/admin/invites/" + inviteID.String() + "/remove"
+	withoutCSRF := httptest.NewRequest(http.MethodPost, path, nil)
+	withoutCSRF.AddCookie(&http.Cookie{Name: "admin_session", Value: session.ID})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, withoutCSRF)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected missing CSRF rejection, got %d", response.Code)
+	}
+
+	malformed := httptest.NewRequest(http.MethodPost, "/admin/invites/not-a-uuid/remove", nil)
+	malformed.AddCookie(&http.Cookie{Name: "admin_session", Value: session.ID})
+	malformed.Header.Set("X-CSRF-Token", session.CSRFToken)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, malformed)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected malformed ID rejection, got %d", response.Code)
+	}
+
+	get := httptest.NewRequest(http.MethodGet, path, nil)
+	get.AddCookie(&http.Cookie{Name: "admin_session", Value: session.ID})
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, get)
+	if response.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected GET remove to be disallowed, got %d", response.Code)
+	}
+
+	remove := httptest.NewRequest(http.MethodPost, path, nil)
+	remove.AddCookie(&http.Cookie{Name: "admin_session", Value: session.ID})
+	remove.Header.Set("X-CSRF-Token", session.CSRFToken)
+	response = httptest.NewRecorder()
+	router.ServeHTTP(response, remove)
+	if response.Code != http.StatusFound || response.Header().Get("Location") != "/admin/invites" {
+		t.Fatalf("unexpected remove response: %d %q", response.Code, response.Header().Get("Location"))
+	}
+	remaining, err := service.ListInvites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("invite was not removed: %+v", remaining)
+	}
+	_ = created
+}
+
+func TestInvitesPageRendersOpaqueRemoveID(t *testing.T) {
+	router, service, _, sessions := newRouterFixture(t)
+	if _, err := service.CreateInvite(t.Context(), uuid.New(), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	invites, err := service.ListInvites(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := sessions.Create(uuid.New(), time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/admin/invites", nil)
+	request.AddCookie(&http.Cookie{Name: "admin_session", Value: session.ID})
+	request.AddCookie(&http.Cookie{Name: "admin_csrf", Value: session.CSRFToken})
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("invites page status %d", response.Code)
+	}
+	expectedAction := `action="/admin/invites/` + invites[0].ID.String() + `/remove"`
+	if !strings.Contains(response.Body.String(), expectedAction) || !strings.Contains(response.Body.String(), "name=\"csrf_token\"") {
+		t.Fatalf("remove form missing from invites page: %s", response.Body.String())
+	}
+}

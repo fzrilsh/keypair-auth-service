@@ -50,6 +50,7 @@ func NewRouter(deps Dependencies) http.Handler {
 	adminGroup.Get("/invites", deps.Admin.Invites)
 	if deps.AdminSessions != nil {
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/invites", deps.Admin.CreateInvite)
+		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/invites/{id}/remove", deps.Admin.RemoveInvite)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/logout", deps.Admin.Logout)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/devices/{id}/approve", deps.Admin.Approve)
 		adminGroup.With(admin.RequireCSRF(deps.AdminSessions)).Post("/devices/{id}/revoke", deps.Admin.Revoke)
