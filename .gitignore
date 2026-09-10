@@ -1,0 +1,27 @@
+# Build artifacts
+bin/
+dist/
+tmp/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+
+# Test and profiling output
+*.test
+coverage.out
+coverage.html
+*.prof
+*.pprof
+*.trace
+
+# macOS/editor files
+.DS_Store
+.vscode/
+.idea/

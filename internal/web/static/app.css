@@ -1,0 +1,6 @@
+:root { font-family: system-ui, sans-serif; color: #1f2937; background: #f8fafc; }
+body { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+label { display: block; margin: .75rem 0; }
+button { cursor: pointer; padding: .45rem .75rem; }
+table { width: 100%; border-collapse: collapse; background: white; }
+th, td { border-bottom: 1px solid #e5e7eb; padding: .6rem; text-align: left; }

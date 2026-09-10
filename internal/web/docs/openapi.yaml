@@ -1,0 +1,166 @@
+openapi: 3.1.0
+info:
+  title: Keypair Auth Service API
+  version: 0.1.0
+  description: Device enrollment and Ed25519 challenge-response API. Device JWTs use EdDSA, include an allowlisted client audience, and expose public signing keys through JWKS. Consumers must cache JWKS for no longer than the advertised max age and retain previous keys during rotation overlap.
+servers:
+  - url: /
+paths:
+  /api/devices/enroll:
+    post:
+      summary: Enroll a device with a one-time invite
+      operationId: enrollDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EnrollRequest'
+      responses:
+        '201':
+          description: Device enrolled and awaiting approval
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EnrollResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /api/auth/challenge:
+    get:
+      summary: Get a one-time challenge nonce
+      operationId: getChallenge
+      parameters:
+        - name: device_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Challenge nonce
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '404': { $ref: '#/components/responses/NotFound' }
+  /.well-known/jwks.json:
+    get:
+      summary: Fetch public JWT signing keys
+      operationId: getJWKS
+      responses:
+        '200':
+          description: Public Ed25519 signing keys. This endpoint is public and may be cached for the configured max age; during rotation it contains the active key followed by the previous public key.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [keys]
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/JWK'
+  /api/auth/verify:
+    post:
+      summary: Verify possession of a device private key
+      operationId: verifyDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Short-lived device JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /healthz:
+    get:
+      summary: Process liveness
+      responses: { '200': { description: Healthy } }
+  /readyz:
+    get:
+      summary: Database readiness
+      responses:
+        '200': { description: Ready }
+        '503': { description: Not ready }
+components:
+  schemas:
+    EnrollRequest:
+      type: object
+      required: [invite_token, public_key]
+      properties:
+        invite_token: { type: string, description: Single-use token from an administrator }
+        public_key: { type: string, description: Raw Ed25519 public key encoded as unpadded base64url }
+        device_name: { type: string, maxLength: 200 }
+    EnrollResponse:
+      type: object
+      required: [device_id, status]
+      properties:
+        device_id: { type: string, format: uuid }
+        status: { type: string, enum: [pending] }
+    ChallengeResponse:
+      type: object
+      required: [device_id, nonce, expires_at]
+      properties:
+        device_id: { type: string, format: uuid }
+        nonce: { type: string, description: 32 random bytes encoded as unpadded base64url }
+        expires_at: { type: string, format: date-time }
+    VerifyRequest:
+      type: object
+      required: [device_id, client_id, signature, timestamp]
+      properties:
+        device_id: { type: string, format: uuid }
+        client_id: { type: string, description: Allowlisted consumer app audience }
+        signature: { type: string, description: Ed25519 signature encoded as unpadded base64url }
+        timestamp: { type: integer, format: int64 }
+    JWK:
+      type: object
+      required: [kty, crv, x, use, alg, kid]
+      properties:
+        kty: { type: string, enum: [OKP] }
+        crv: { type: string, enum: [Ed25519] }
+        x: { type: string, description: Public key encoded as unpadded base64url }
+        use: { type: string, enum: [sig] }
+        alg: { type: string, enum: [EdDSA] }
+        kid: { type: string }
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, enum: [Bearer] }
+        expires_in: { type: integer, format: int64, example: 900 }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+  securitySchemes:
+    DeviceBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: EdDSA-signed device JWT. Consumers must validate alg=EdDSA, kid, issuer, exact audience, and expiry against the public JWKS.
+  responses:
+    BadRequest:
+      description: Invalid request
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Unauthorized:
+      description: Generic authentication failure
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    NotFound:
+      description: Device is unknown or not approved
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    Conflict:
+      description: Duplicate key or invalid state transition
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
