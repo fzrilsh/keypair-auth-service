@@ -171,8 +171,8 @@ func TestInvitesPageRendersOpaqueRemoveID(t *testing.T) {
 		t.Fatalf("invites page status %d", response.Code)
 	}
 	expectedAction := `action="/admin/invites/` + invites[0].ID.String() + `/remove"`
-	if !strings.Contains(response.Body.String(), expectedAction) || !strings.Contains(response.Body.String(), "name=\"csrf_token\"") {
-		t.Fatalf("remove form missing from invites page: %s", response.Body.String())
+	if !strings.Contains(response.Body.String(), expectedAction) || !strings.Contains(response.Body.String(), "name=\"csrf_token\"") || !strings.Contains(response.Body.String(), `src="/static/uuid.js"`) || !strings.Contains(response.Body.String(), `id="generate-user-id"`) {
+		t.Fatalf("remove form or UUID generator missing from invites page: %s", response.Body.String())
 	}
 }
 
@@ -224,5 +224,14 @@ func TestScopeAdminRoutesRequireCSRFAndRenderAssignments(t *testing.T) {
 	router.ServeHTTP(response, invites)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `name="scope_id"`) || !strings.Contains(response.Body.String(), scopes[0].ID.String()) {
 		t.Fatalf("scope checkbox missing from invite page: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestUUIDGeneratorAssetIsServed(t *testing.T) {
+	router, _, _, _ := newRouterFixture(t)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/uuid.js", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "crypto.randomUUID") {
+		t.Fatalf("UUID asset was not served: %d %s", response.Code, response.Body.String())
 	}
 }
